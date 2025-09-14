@@ -5,48 +5,56 @@
 #include <stdio.h>
 
 /**
-Try to use LinkList, for Array version see 'csim_array.c'.
+Cache simulator with LRU replacement policy using doubly linked list.
 */
 
 int S = 0, E = 0, B = 0;
 int hit_count = 0, miss_count = 0, eviction_count = 0;
 int v = 0;
 static int totalSet;
-static int global_timestamp = 0;
 
-// LinkList
-typedef struct line {
+// Cache line structure for doubly linked list
+typedef struct cache_line {
     int valid;
-    int tag;
-    struct line* prev;
-    struct line* next;
-    int size;
-} line;
+    unsigned long tag;
+    struct cache_line* prev;
+    struct cache_line* next;
+} cache_line_t;
 
+// Cache set structure
 typedef struct {
-    line* head;
-    line* tail;
-    line* lines;
-    int next_to_evict;
-} set;
+    cache_line_t* head;  // dummy head node
+    cache_line_t* tail;  // dummy tail node
+    int size;            // current number of valid lines
+} cache_set_t;
 
-static set* cache;
+static cache_set_t* cache;
 
-// LinkList Tools
-void delete(line* tar, set* cur) {
-    tar->next->prev = tar->prev;
-    tar->prev->next = tar->next;
-   (*(cur->size))--;
+// LinkList Tools - Remove a node from the list
+void removeNode(cache_line_t* node) {
+    node->prev->next = node->next;
+    node->next->prev = node->prev;
 }
 
-void addFirst(line* tar, set* cur) {
-    tar->next = cur->head->next;
-    tar->prev = cur->head;
-    (*(cur->size))++;
+// Add a node right after head (most recently used position)
+void addToHead(cache_set_t* set, cache_line_t* node) {
+    node->next = set->head->next;
+    node->prev = set->head;
+    set->head->next->prev = node;
+    set->head->next = node;
 }
 
-void evict(set* cur) {
-    delete(cur->tail->prev, cur);
+// Move a node to head (mark as most recently used)
+void moveToHead(cache_set_t* set, cache_line_t* node) {
+    removeNode(node);
+    addToHead(set, node);
+}
+
+// Remove the last node (least recently used)
+cache_line_t* removeTail(cache_set_t* set) {
+    cache_line_t* last = set->tail->prev;
+    removeNode(last);
+    return last;
 }
 
 // ./csim -v -s 4 -E 1 -b 4 -t traces/yi.trace
@@ -75,22 +83,25 @@ void parseInput(int argc, char *argv[], FILE** tracefile) {
 }
 
 void update(size_t address) {
-    size_t set_pos = address >> B & (totalSet - 1);
+    size_t set_pos = (address >> B) & (totalSet - 1);
     size_t tag = address >> (B + S);
 
-    set* target_set = &cache[set_pos];
+    cache_set_t* target_set = &cache[set_pos];
 
     // Check for cache hit
-    for (int i = 0; i < E; i++) {
-        if (target_set->lines[i].valid && target_set->lines[i].tag == tag) {
+    cache_line_t* cur_line = target_set->head->next;
+    while (cur_line != target_set->tail) {
+        if (cur_line->valid && cur_line->tag == tag) {
+            // Cache hit
             hit_count++;
-            // Update timestamp for LRU
-            target_set->lines[i].timestamp = global_timestamp++;
             if (v) {
                 printf(" hit");
             }
+            // Move to head (most recently used)
+            moveToHead(target_set, cur_line);
             return;
         }
+        cur_line = cur_line->next;
     }
     
     // Cache miss
@@ -98,39 +109,27 @@ void update(size_t address) {
     if (v) {
         printf(" miss");
     }
+    
+    // Create new cache line
+    cache_line_t* newline = malloc(sizeof(cache_line_t));
+    newline->tag = tag;
+    newline->valid = 1;
+    
+    // Add to head (most recently used position)
+    addToHead(target_set, newline);
+    target_set->size++;
 
-    int line_to_use = -1;
-    
-    // Find empty line first
-    for (int i = 0; i < E; i++) {
-        if (!target_set->lines[i].valid) {
-            line_to_use = i;
-            break;
-        }
-    }
-    
-    // If no empty line, find LRU line
-    if (line_to_use == -1) {
+    // Check if eviction is needed
+    if (target_set->size > E) {
+        // Remove least recently used (tail)
+        cache_line_t* evicted = removeTail(target_set);
+        free(evicted);
+        target_set->size--;
         eviction_count++;
         if (v) {
             printf(" eviction");
         }
-        
-        // Find the line with smallest timestamp (least recently used)
-        int lru_timestamp = target_set->lines[0].timestamp;
-        line_to_use = 0;
-        for (int i = 1; i < E; i++) {
-            if (target_set->lines[i].timestamp < lru_timestamp) {
-                lru_timestamp = target_set->lines[i].timestamp;
-                line_to_use = i;
-            }
-        }
     }
-    
-    // Update the selected line
-    target_set->lines[line_to_use].valid = 1;
-    target_set->lines[line_to_use].tag = tag;
-    target_set->lines[line_to_use].timestamp = global_timestamp++;
 }
 
 void simulate(FILE* tracefile) {
@@ -139,15 +138,21 @@ void simulate(FILE* tracefile) {
     int size;
     
     // Initialize cache
-    cache = malloc(totalSet * sizeof(*cache));
+    cache = malloc(totalSet * sizeof(cache_set_t));
     for (int i = 0; i < totalSet; i++) {
-        cache[i].lines = malloc(sizeof(line) * E); // E lines
-        cache[i].next_to_evict = 0;
-        for (int j = 0; j < E; j++) {
-            cache[i].lines[j].valid = 0;
-            cache[i].lines[j].tag = -1;
-            cache[i].lines[j].timestamp = 0;
-        }
+        cache_set_t* cur_set = &cache[i];
+        
+        // Initialize dummy head and tail nodes
+        cur_set->head = malloc(sizeof(cache_line_t));
+        cur_set->tail = malloc(sizeof(cache_line_t));
+        
+        // Connect head and tail
+        cur_set->head->next = cur_set->tail;
+        cur_set->tail->prev = cur_set->head;
+        cur_set->head->prev = NULL;
+        cur_set->tail->next = NULL;
+        
+        cur_set->size = 0;
     }
     
     // S 00602264,1
@@ -179,9 +184,15 @@ void simulate(FILE* tracefile) {
             printf("\n");
         }
     }
-    // free
+    
+    // Free memory
     for (int i = 0; i < totalSet; i++) {
-        free(cache[i].lines);
+        cache_line_t* cur = cache[i].head;
+        while (cur != NULL) {
+            cache_line_t* next = cur->next;
+            free(cur);
+            cur = next;
+        }
     }
     free(cache);
     fclose(tracefile);
