@@ -4,50 +4,25 @@
 #include <unistd.h>
 #include <stdio.h>
 
-/**
-Try to use LinkList, for Array version see 'csim_array.c'.
-*/
-
 int S = 0, E = 0, B = 0;
 int hit_count = 0, miss_count = 0, eviction_count = 0;
 int v = 0;
 static int totalSet;
 static int global_timestamp = 0;
 
-// LinkList
+// Array
 typedef struct line {
     int valid;
     int tag;
-    struct line* prev;
-    struct line* next;
-    int size;
+    int timestamp;
 } line;
 
 typedef struct {
-    line* head;
-    line* tail;
     line* lines;
     int next_to_evict;
 } set;
 
 static set* cache;
-
-// LinkList Tools
-void delete(line* tar, set* cur) {
-    tar->next->prev = tar->prev;
-    tar->prev->next = tar->next;
-   (*(cur->size))--;
-}
-
-void addFirst(line* tar, set* cur) {
-    tar->next = cur->head->next;
-    tar->prev = cur->head;
-    (*(cur->size))++;
-}
-
-void evict(set* cur) {
-    delete(cur->tail->prev, cur);
-}
 
 // ./csim -v -s 4 -E 1 -b 4 -t traces/yi.trace
 void parseInput(int argc, char *argv[], FILE** tracefile) {
